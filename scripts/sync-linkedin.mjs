@@ -1,11 +1,5 @@
 /**
  * LinkedIn → Profile.json Auto-Sync Script
- * 
- * Uses LinkedIn's internal API with your li_at session cookie
- * to fetch your latest profile data and merge it into profile.json.
- * 
- * Usage:
- *   LINKEDIN_COOKIE="your_li_at_cookie" node scripts/sync-linkedin.mjs
  */
 
 import fs from 'fs';
@@ -16,59 +10,85 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROFILE_PATH = path.join(__dirname, '..', 'public', 'data', 'profile.json');
 const LINKEDIN_VANITY = 'adam-naeman';
 
-// ---- Fetch from LinkedIn with proper auth ----
+// ---- Fetch from LinkedIn with perfectly forged Voyager auth ----
 async function linkedInFetch(url, cookie) {
+  // Clean the cookie in case it was copied with quotes
+  const cleanCookie = cookie.replace(/^"|"$/g, '').trim();
+  
+  // Generate our own CSRF token and inject it as JSESSIONID
+  const csrf = 'ajax:' + Math.random().toString(36).substring(2);
+
   const response = await fetch(url, {
     headers: {
       'accept': 'application/vnd.linkedin.normalized+json+2.1',
       'x-li-lang': 'en_US',
       'x-restli-protocol-version': '2.0.0',
-      'x-li-page-instance': 'urn:li:page:d_flagship3_profile_view_base;',
-      'csrf-token': 'ajax:0',
-      'cookie': `li_at=${cookie}; JSESSIONID="ajax:0"`,
+      'csrf-token': csrf,
+      'cookie': `li_at=${cleanCookie}; JSESSIONID="${csrf}"`,
       'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
     },
   });
 
+  const status = response.status;
   if (!response.ok) {
     const text = await response.text().catch(() => '');
-    throw new Error(`LinkedIn API ${response.status}: ${response.statusText} — ${text.substring(0, 200)}`);
+    throw new Error(`API returned ${status}. Details: ${text.substring(0, 150)}`);
   }
 
   return response.json();
 }
 
-// ---- Fetch Full Profile ----
+// ---- Fetch Full Profile with fallback endpoints ----
 async function fetchProfile(cookie) {
   console.log('📡 Fetching LinkedIn profile...');
 
-  // Use the modern identity profiles endpoint
-  // 410 Gone usually means the old /profileView slug endpoint was deprecated
-  const data = await linkedInFetch(
-    `https://www.linkedin.com/voyager/api/identity/profiles?q=memberIdentity&memberIdentity=${LINKEDIN_VANITY}`,
-    cookie
-  );
+  let data = null;
+  const errors = [];
 
-  // We also need the profileView specifically for full education/experience details
-  const viewData = await linkedInFetch(
-    `https://www.linkedin.com/voyager/api/identity/profiles/${LINKEDIN_VANITY}/profileView`,
-    cookie
-  ).catch(err => {
-    console.warn('⚠️ profileView endpoint failed, trying alternative...', err.message);
-    return null;
-  });
+  // Try Endpoint 1: Modern Identity Profiles
+  try {
+    console.log('   ↳ Trying modern endpoint...');
+    data = await linkedInFetch(
+      `https://www.linkedin.com/voyager/api/identity/profiles?q=memberIdentity&memberIdentity=${LINKEDIN_VANITY}`,
+      cookie
+    );
+    if (data?.elements?.length > 0) return { data };
+  } catch (err) {
+    errors.push(`Modern: ${err.message}`);
+  }
 
-  return { data, viewData };
+  // Try Endpoint 2: Base Profile
+  try {
+    console.log('   ↳ Trying base endpoint...');
+    data = await linkedInFetch(
+      `https://www.linkedin.com/voyager/api/identity/profiles/${LINKEDIN_VANITY}`,
+      cookie
+    );
+    if (data) return { data };
+  } catch (err) {
+    errors.push(`Base: ${err.message}`);
+  }
+
+  // Try Endpoint 3: Legacy ProfileView
+  try {
+    console.log('   ↳ Trying legacy profileView endpoint...');
+    data = await linkedInFetch(
+      `https://www.linkedin.com/voyager/api/identity/profiles/${LINKEDIN_VANITY}/profileView`,
+      cookie
+    );
+    if (data) return { data };
+  } catch (err) {
+    errors.push(`Legacy: ${err.message}`);
+  }
+
+  throw new Error(`All endpoints failed.\nErrors:\n${errors.join('\n')}`);
 }
 
-// ---- Extract Data from Profile View ----
+// ---- Extract Data from any schema version ----
 function extractProfileData(raw) {
-  // Combine elements from both endpoints if available
   const elements = raw.data?.elements || [];
-  const profile = elements[0] || {};
+  const included = raw.data?.included || [];
   
-  const included = raw.viewData?.included || raw.data?.included || [];
-
   // Extract education
   const education = included
     .filter((item) => item.$type === 'com.linkedin.voyager.identity.profile.Education')
@@ -108,10 +128,6 @@ function extractProfileData(raw) {
     }));
 
   return {
-    name: [profile.firstName, profile.lastName].filter(Boolean).join(' ') || undefined,
-    title: profile.headline || undefined,
-    location: profile.locationName || profile.geoLocationName || undefined,
-    about: profile.summary || undefined,
     education: education.length > 0 ? education : undefined,
     certifications: certifications.length > 0 ? certifications : undefined,
     linkedin_skills: skills.length > 0 ? skills : undefined,
@@ -139,19 +155,12 @@ function formatDateRange(timePeriod) {
 function mergeProfile(existing, linkedInData) {
   const merged = { ...existing };
 
-  // Only override fields that LinkedIn returned (non-undefined)
-  if (linkedInData.name) merged.name = linkedInData.name;
-  if (linkedInData.title) merged.title = linkedInData.title;
-  if (linkedInData.location) merged.location = linkedInData.location;
-  if (linkedInData.about) merged.about = linkedInData.about;
   if (linkedInData.education) merged.education = linkedInData.education;
   if (linkedInData.certifications) merged.certifications = linkedInData.certifications;
   if (linkedInData.linkedin_skills) merged.linkedin_skills = linkedInData.linkedin_skills;
   if (linkedInData.experience) merged.experience = linkedInData.experience;
 
   merged.last_synced = linkedInData.last_synced;
-
-  // PRESERVE: resumes, github, subtitle_roles, social_links, stats, skills (categorized), avatar_url, email
   return merged;
 }
 
@@ -161,53 +170,32 @@ async function main() {
 
   if (!cookie) {
     console.error('❌ Missing LINKEDIN_COOKIE environment variable.');
-    console.error('');
-    console.error('How to get your LinkedIn cookie:');
-    console.error('  1. Log in to linkedin.com in your browser');
-    console.error('  2. Open DevTools (F12) → Application → Cookies → linkedin.com');
-    console.error('  3. Copy the value of the "li_at" cookie');
-    console.error('  4. Run: LINKEDIN_COOKIE="paste_value_here" node scripts/sync-linkedin.mjs');
     process.exit(1);
   }
 
   try {
-    // Load existing profile
     let existing = {};
     try {
       existing = JSON.parse(fs.readFileSync(PROFILE_PATH, 'utf-8'));
-      console.log('📂 Loaded existing profile.json');
     } catch {
-      console.log('📂 No existing profile.json found, creating new one');
+      console.log('📂 No existing profile.json found');
     }
 
-    // Fetch from LinkedIn
     const raw = await fetchProfile(cookie);
     const linkedInData = extractProfileData(raw);
 
-    console.log(`✅ Fetched profile: ${linkedInData.name || '(name not found)'}`);
+    console.log(`✅ Fetched profile successfully!`);
     console.log(`   📚 Education: ${linkedInData.education?.length || 0} entries`);
     console.log(`   🏆 Certifications: ${linkedInData.certifications?.length || 0} entries`);
     console.log(`   💼 Experience: ${linkedInData.experience?.length || 0} entries`);
     console.log(`   🛠️  Skills: ${linkedInData.linkedin_skills?.length || 0} entries`);
 
-    // Merge
     const merged = mergeProfile(existing, linkedInData);
-
-    // Write back
     fs.writeFileSync(PROFILE_PATH, JSON.stringify(merged, null, 2) + '\n', 'utf-8');
+    
     console.log(`\n💾 Updated profile.json`);
-    console.log(`🕐 Last synced: ${merged.last_synced}`);
-
   } catch (err) {
-    console.error('❌ LinkedIn sync failed:', err.message);
-    console.error('');
-    if (err.message.includes('401') || err.message.includes('403')) {
-      console.error('🔑 Your cookie has expired. Please re-copy li_at from your browser.');
-    } else {
-      console.error('Common issues:');
-      console.error('  - Cookie expired → Re-copy li_at from browser');
-      console.error('  - Rate limited → Try again later');
-    }
+    console.error(`\n❌ LinkedIn sync failed:\n${err.message}`);
     process.exit(1);
   }
 }
