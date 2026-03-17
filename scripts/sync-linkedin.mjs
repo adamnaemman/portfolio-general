@@ -132,7 +132,13 @@ async function main() {
   console.log('🚀 Launching headless browser...');
   const browser = await puppeteer.launch({
     headless: 'new',
-    args: ['--no-sandbox', '--disable-setuid-sandbox']
+    args: [
+      '--no-sandbox', 
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-accelerated-2d-canvas',
+      '--disable-gpu'
+    ]
   });
 
   try {
@@ -171,8 +177,13 @@ async function main() {
     });
 
     console.log(`🌐 Navigating to ${PROFILE_URL}...`);
-    // Go to profile, wait until network is mostly idle
-    const response = await page.goto(PROFILE_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+    // 'domcontentloaded' is safer than 'networkidle2' because LinkedIn has endless tracking pixels
+    await page.goto(PROFILE_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    
+    // Wait for the main profile container to ensure the React app booted
+    await page.waitForSelector('.pv-top-card', { timeout: 15000 }).catch(() => {
+      console.log('⚠️ Could not find standard profile container, continuing anyway...');
+    });
     
     // If we land on authwall, cookie is invalid
     if (page.url().includes('login') || page.url().includes('authwall')) {
