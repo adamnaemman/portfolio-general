@@ -434,6 +434,7 @@ async function fetchGitHubRepos() {
       localStorage.setItem(`${cacheKey}_time`, Date.now().toString());
     }
 
+    updateRepoStatCounter(repos);
     renderProjects(repos);
   } catch (err) {
     console.warn('GitHub API failed, trying cache...', err);
@@ -441,11 +442,27 @@ async function fetchGitHubRepos() {
     // Try stale cache
     const cached = localStorage.getItem(cacheKey);
     if (cached) {
-      renderProjects(JSON.parse(cached));
+      const parsedCache = JSON.parse(cached);
+      updateRepoStatCounter(parsedCache);
+      renderProjects(parsedCache);
     } else {
       loading.innerHTML = `
         <p style="color: var(--text-muted);">Unable to load GitHub repos. <a href="https://github.com/${username}" target="_blank" style="color: var(--accent-primary);">View on GitHub →</a></p>
       `;
+    }
+  }
+}
+
+function updateRepoStatCounter(repos) {
+  // Update the stats counter dynamically
+  const statEl = document.getElementById('stat-github-repos');
+  if (statEl) {
+    const validRepos = repos.filter(r => !r.fork).length;
+    statEl.setAttribute('data-target', validRepos);
+    // If it hasn't animated yet, the observer will catch it.
+    // If it has already animated to the old placeholder, update it immediately with a mini animation
+    if (statEl.textContent !== '0') {
+      animateCounter(statEl);
     }
   }
 }
