@@ -42,22 +42,32 @@ async function linkedInFetch(url, cookie) {
 async function fetchProfile(cookie) {
   console.log('📡 Fetching LinkedIn profile...');
 
-  // Use the profileView endpoint which returns everything
+  // Use the modern identity profiles endpoint
+  // 410 Gone usually means the old /profileView slug endpoint was deprecated
   const data = await linkedInFetch(
-    `https://www.linkedin.com/voyager/api/identity/profiles/${LINKEDIN_VANITY}/profileView`,
+    `https://www.linkedin.com/voyager/api/identity/profiles?q=memberIdentity&memberIdentity=${LINKEDIN_VANITY}`,
     cookie
   );
 
-  return data;
+  // We also need the profileView specifically for full education/experience details
+  const viewData = await linkedInFetch(
+    `https://www.linkedin.com/voyager/api/identity/profiles/${LINKEDIN_VANITY}/profileView`,
+    cookie
+  ).catch(err => {
+    console.warn('⚠️ profileView endpoint failed, trying alternative...', err.message);
+    return null;
+  });
+
+  return { data, viewData };
 }
 
 // ---- Extract Data from Profile View ----
-function extractProfileData(data) {
-  const included = data?.included || [];
-  const profileEntries = included.filter(
-    (item) => item.$type === 'com.linkedin.voyager.identity.profile.Profile'
-  );
-  const profile = profileEntries[0] || {};
+function extractProfileData(raw) {
+  // Combine elements from both endpoints if available
+  const elements = raw.data?.elements || [];
+  const profile = elements[0] || {};
+  
+  const included = raw.viewData?.included || raw.data?.included || [];
 
   // Extract education
   const education = included
