@@ -1,0 +1,90 @@
+{
+  "name": "Adam Naeman",
+  "title": "Computer Science Student | AI & ML Enthusiast",
+  "subtitle_roles": [
+    "AI / ML Developer",
+    "NLP Researcher",
+    "Full-Stack Developer",
+    "Game Dev Enthusiast"
+  ],
+  "location": "Bentong, Pahang, Malaysia",
+  "email": "0damkim254@gmail.com",
+  "about": "Computer Science student passionate about game development, AI, and cutting-edge tech. I specialize in building intelligent systems using Natural Language Processing and deep learning, while also exploring full-stack web development and networking. Currently pursuing my Bachelor's degree at IIUM with a strong drive to push the boundaries of what technology can achieve.",
+  "github": "adamnaemman",
+  "linkedin": "adam-naeman",
+  "portfolio_url": "https://sites.google.com/view/adamnaeman",
+  "avatar_url": "https://avatars.githubusercontent.com/u/159782996?v=4",
+
+  "stats": {
+    "github_repos": 9,
+    "certifications": 2,
+    "technologies": 8,
+    "gpa": "3.53"
+  },
+
+  "education": [
+    {
+      "institution": "International Islamic University Malaysia (IIUM)",
+      "degree": "Bachelor's Degree in Computer Science",
+      "period": "Oct 2024 — Oct 2028",
+      "grade": "",
+      "highlights": ["Natural Language Processing (NLP)", "Artificial Intelligence", "Software Engineering"]
+    },
+    {
+      "institution": "Centre for Foundation Studies, IIUM",
+      "degree": "Foundation in Engineering & Computer Science",
+      "period": "Jul 2023 — Jul 2024",
+      "grade": "3.53 CGPA",
+      "highlights": ["Mathematics", "Physics", "Programming Fundamentals"]
+    }
+  ],
+
+  "certifications": [
+    {
+      "name": "Natural Language Processing in Python",
+      "issuer": "DataCamp",
+      "date": "Mar 2026",
+      "icon": "award"
+    },
+    {
+      "name": "Object Oriented Programming Certification Course",
+      "issuer": "Programming Hub",
+      "date": "Mar 2025",
+      "icon": "code"
+    }
+  ],
+
+  "skills": {
+    "languages": ["Python", "Java", "JavaScript", "PHP", "SQL", "HTML/CSS"],
+    "frameworks": ["Laravel", "React", "Next.js", "Vite"],
+    "ai_ml": ["NLP", "CNN", "TensorFlow", "Keras", "Scikit-learn"],
+    "tools": ["Git", "GitHub", "VS Code", "Google Colab", "Jupyter"],
+    "concepts": ["OOP", "Data Structures", "Networking", "Game Development"]
+  },
+
+  "resumes": [
+    {
+      "label": "General Resume",
+      "filename": "resume-general.pdf",
+      "description": "My general-purpose resume"
+    }
+  ],
+
+  "social_links": [
+    {
+      "platform": "GitHub",
+      "url": "https://github.com/adamnaemman",
+      "icon": "github"
+    },
+    {
+      "platform": "LinkedIn",
+      "url": "https://www.linkedin.com/in/adam-naeman/",
+      "icon": "linkedin"
+    },
+    {
+      "platform": "Email",
+      "url": "mailto:0damkim254@gmail.com",
+      "icon": "mail"
+    }
+  ]
+}
