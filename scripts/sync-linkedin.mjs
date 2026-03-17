@@ -1,7 +1,12 @@
 /**
- * LinkedIn → Profile.json Auto-Sync Script
+ * LinkedIn → Profile.json Auto-Sync Script (Puppeteer Edition)
+ * 
+ * Uses headless Chrome to log in with your li_at cookie and natively
+ * intercepts the Voyager API JSON payloads directly from the Network tab.
+ * This completely bypasses LinkedIn's aggressive bot/CSRF protections.
  */
 
+import puppeteer from 'puppeteer';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -9,123 +14,64 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROFILE_PATH = path.join(__dirname, '..', 'public', 'data', 'profile.json');
 const LINKEDIN_VANITY = 'adam-naeman';
-
-// ---- Fetch from LinkedIn with perfectly forged Voyager auth ----
-async function linkedInFetch(url, cookie) {
-  // Clean the cookie in case it was copied with quotes
-  const cleanCookie = cookie.replace(/^"|"$/g, '').trim();
-  
-  // Generate our own CSRF token and inject it as JSESSIONID
-  const csrf = 'ajax:' + Math.random().toString(36).substring(2);
-
-  const response = await fetch(url, {
-    headers: {
-      'accept': 'application/vnd.linkedin.normalized+json+2.1',
-      'x-li-lang': 'en_US',
-      'x-restli-protocol-version': '2.0.0',
-      'csrf-token': csrf,
-      'cookie': `li_at=${cleanCookie}; JSESSIONID="${csrf}"`,
-      'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-    },
-  });
-
-  const status = response.status;
-  if (!response.ok) {
-    const text = await response.text().catch(() => '');
-    throw new Error(`API returned ${status}. Details: ${text.substring(0, 150)}`);
-  }
-
-  return response.json();
-}
-
-// ---- Fetch Full Profile with fallback endpoints ----
-async function fetchProfile(cookie) {
-  console.log('📡 Fetching LinkedIn profile...');
-
-  let data = null;
-  const errors = [];
-
-  // Try Endpoint 1: Modern Identity Profiles
-  try {
-    console.log('   ↳ Trying modern endpoint...');
-    data = await linkedInFetch(
-      `https://www.linkedin.com/voyager/api/identity/profiles?q=memberIdentity&memberIdentity=${LINKEDIN_VANITY}`,
-      cookie
-    );
-    if (data?.elements?.length > 0) return { data };
-  } catch (err) {
-    errors.push(`Modern: ${err.message}`);
-  }
-
-  // Try Endpoint 2: Base Profile
-  try {
-    console.log('   ↳ Trying base endpoint...');
-    data = await linkedInFetch(
-      `https://www.linkedin.com/voyager/api/identity/profiles/${LINKEDIN_VANITY}`,
-      cookie
-    );
-    if (data) return { data };
-  } catch (err) {
-    errors.push(`Base: ${err.message}`);
-  }
-
-  // Try Endpoint 3: Legacy ProfileView
-  try {
-    console.log('   ↳ Trying legacy profileView endpoint...');
-    data = await linkedInFetch(
-      `https://www.linkedin.com/voyager/api/identity/profiles/${LINKEDIN_VANITY}/profileView`,
-      cookie
-    );
-    if (data) return { data };
-  } catch (err) {
-    errors.push(`Legacy: ${err.message}`);
-  }
-
-  throw new Error(`All endpoints failed.\nErrors:\n${errors.join('\n')}`);
-}
+const PROFILE_URL = `https://www.linkedin.com/in/${LINKEDIN_VANITY}/`;
 
 // ---- Extract Data from any schema version ----
-function extractProfileData(raw) {
-  const elements = raw.data?.elements || [];
-  const included = raw.data?.included || [];
+function extractProfileData(parts) {
+  let education = [];
+  let certifications = [];
+  let skills = [];
+  let experience = [];
   
-  // Extract education
-  const education = included
-    .filter((item) => item.$type === 'com.linkedin.voyager.identity.profile.Education')
-    .map((edu) => ({
-      institution: edu.schoolName || '',
-      degree: [edu.degreeName, edu.fieldOfStudy].filter(Boolean).join(', '),
-      period: formatDateRange(edu.timePeriod),
-      grade: edu.grade || '',
-      highlights: edu.activities ? [edu.activities] : [],
-    }));
+  // Combine all intercepted parts
+  for (const raw of parts) {
+    const included = raw.included || [];
+    
+    // Extract education
+    const eduItems = included
+      .filter((item) => item.$type === 'com.linkedin.voyager.identity.profile.Education')
+      .map((edu) => ({
+        institution: edu.schoolName || '',
+        degree: [edu.degreeName, edu.fieldOfStudy].filter(Boolean).join(', '),
+        period: formatDateRange(edu.timePeriod),
+        grade: edu.grade || '',
+        highlights: edu.activities ? [edu.activities] : [],
+      }));
+    if (eduItems.length > 0) education.push(...eduItems);
 
-  // Extract certifications
-  const certifications = included
-    .filter((item) => item.$type === 'com.linkedin.voyager.identity.profile.Certification')
-    .map((cert) => ({
-      name: cert.name || '',
-      issuer: cert.authority || '',
-      date: formatDate(cert.timePeriod?.startDate),
-      icon: 'award',
-    }));
+    // Extract certifications
+    const certItems = included
+      .filter((item) => item.$type === 'com.linkedin.voyager.identity.profile.Certification')
+      .map((cert) => ({
+        name: cert.name || '',
+        issuer: cert.authority || '',
+        date: formatDate(cert.timePeriod?.startDate),
+        icon: 'award',
+      }));
+    if (certItems.length > 0) certifications.push(...certItems);
 
-  // Extract skills
-  const skills = included
-    .filter((item) => item.$type === 'com.linkedin.voyager.identity.profile.Skill')
-    .map((s) => s.name)
-    .filter(Boolean);
+    // Extract skills
+    const skillItems = included
+      .filter((item) => item.$type === 'com.linkedin.voyager.identity.profile.Skill')
+      .map((s) => s.name)
+      .filter(Boolean);
+    if (skillItems.length > 0) skills.push(...skillItems);
 
-  // Extract experience/positions
-  const experience = included
-    .filter((item) => item.$type === 'com.linkedin.voyager.identity.profile.Position')
-    .map((pos) => ({
-      title: pos.title || '',
-      company: pos.companyName || '',
-      period: formatDateRange(pos.timePeriod),
-      description: pos.description || '',
-      location: pos.locationName || '',
-    }));
+    // Extract experience/positions
+    const expItems = included
+      .filter((item) => item.$type === 'com.linkedin.voyager.identity.profile.Position')
+      .map((pos) => ({
+        title: pos.title || '',
+        company: pos.companyName || '',
+        period: formatDateRange(pos.timePeriod),
+        description: pos.description || '',
+        location: pos.locationName || '',
+      }));
+    if (expItems.length > 0) experience.push(...expItems);
+  }
+
+  // Deduplicate
+  skills = [...new Set(skills)];
 
   return {
     education: education.length > 0 ? education : undefined,
@@ -166,37 +112,121 @@ function mergeProfile(existing, linkedInData) {
 
 // ---- Main ----
 async function main() {
-  const cookie = process.env.LINKEDIN_COOKIE;
+  let cookie = process.env.LINKEDIN_COOKIE;
 
   if (!cookie) {
     console.error('❌ Missing LINKEDIN_COOKIE environment variable.');
     process.exit(1);
   }
+  
+  cookie = cookie.replace(/^"|"$/g, '').trim();
+
+  let existing = {};
+  try {
+    existing = JSON.parse(fs.readFileSync(PROFILE_PATH, 'utf-8'));
+    console.log('📂 Loaded existing profile.json');
+  } catch {
+    console.log('📂 No existing profile.json found');
+  }
+
+  console.log('🚀 Launching headless browser...');
+  const browser = await puppeteer.launch({
+    headless: 'new',
+    args: ['--no-sandbox', '--disable-setuid-sandbox']
+  });
 
   try {
-    let existing = {};
-    try {
-      existing = JSON.parse(fs.readFileSync(PROFILE_PATH, 'utf-8'));
-    } catch {
-      console.log('📂 No existing profile.json found');
+    const page = await browser.newPage();
+    
+    // Set custom user agent
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36');
+
+    // Inject the li_at cookie
+    await page.setCookie({
+      name: 'li_at',
+      value: cookie,
+      domain: '.www.linkedin.com',
+      path: '/',
+      httpOnly: true,
+      secure: true
+    });
+
+    const interceptedData = [];
+
+    // Listen to network responses
+    page.on('response', async (response) => {
+      const url = response.url();
+      // Intercept any Voyager API profiles requests that return JSON
+      if (url.includes('/voyager/api/identity/profiles') || url.includes('graphql')) {
+        const contentType = response.headers()['content-type'] || '';
+        if (contentType.includes('application/json') || contentType.includes('vnd.linkedin')) {
+          try {
+            const json = await response.json();
+            interceptedData.push(json);
+          } catch (e) {
+            // Ignore non-json or chunked responses
+          }
+        }
+      }
+    });
+
+    console.log(`🌐 Navigating to ${PROFILE_URL}...`);
+    // Go to profile, wait until network is mostly idle
+    const response = await page.goto(PROFILE_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+    
+    // If we land on authwall, cookie is invalid
+    if (page.url().includes('login') || page.url().includes('authwall')) {
+      throw new Error('Cookie "li_at" has expired. Please copy a new one from your browser.');
     }
 
-    const raw = await fetchProfile(cookie);
-    const linkedInData = extractProfileData(raw);
+    // Scroll down slowly to trigger lazy-loaded sections (Experience, Certifications)
+    console.log('📜 Scrolling page to trigger data loading...');
+    await page.evaluate(async () => {
+      await new Promise((resolve) => {
+        let totalHeight = 0;
+        const distance = 500;
+        const timer = setInterval(() => {
+          const scrollHeight = document.body.scrollHeight;
+          window.scrollBy(0, distance);
+          totalHeight += distance;
+          if (totalHeight >= scrollHeight - window.innerHeight) {
+            clearInterval(timer);
+            resolve();
+          }
+        }, 500);
+      });
+    });
 
-    console.log(`✅ Fetched profile successfully!`);
+    // Wait a couple more seconds for API requests to settle
+    await new Promise(r => setTimeout(r, 2000));
+
+    if (interceptedData.length === 0) {
+      throw new Error('No profile data intercepted. The page structure might have changed.');
+    }
+
+    const linkedInData = extractProfileData(interceptedData);
+
+    console.log(`✅ Profile data intercepted and extracted successfully!`);
     console.log(`   📚 Education: ${linkedInData.education?.length || 0} entries`);
     console.log(`   🏆 Certifications: ${linkedInData.certifications?.length || 0} entries`);
     console.log(`   💼 Experience: ${linkedInData.experience?.length || 0} entries`);
     console.log(`   🛠️  Skills: ${linkedInData.linkedin_skills?.length || 0} entries`);
 
+    if (!linkedInData.experience && !linkedInData.education && !linkedInData.skills) {
+      console.warn('⚠️ Warning: No data was extracted from the intercepted payloads. Could mean array structures changed.');
+    }
+
+    // Merge and save
     const merged = mergeProfile(existing, linkedInData);
     fs.writeFileSync(PROFILE_PATH, JSON.stringify(merged, null, 2) + '\n', 'utf-8');
     
-    console.log(`\n💾 Updated profile.json`);
+    console.log(`\n💾 Updated profile.json successfully.`);
+
   } catch (err) {
-    console.error(`\n❌ LinkedIn sync failed:\n${err.message}`);
+    console.error(`\n❌ Puppeteer sync failed:\n${err.message}`);
     process.exit(1);
+  } finally {
+    await browser.close();
   }
 }
 
