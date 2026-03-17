@@ -11,6 +11,9 @@ on:
 permissions:
   contents: write
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   sync:
     runs-on: ubuntu-latest
@@ -22,12 +25,13 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Run LinkedIn sync
         env:
           LINKEDIN_COOKIE: ${{ secrets.LINKEDIN_COOKIE }}
         run: node scripts/sync-linkedin.mjs
+        continue-on-error: false
 
       - name: Check for changes
         id: changes

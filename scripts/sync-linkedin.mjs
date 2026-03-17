@@ -1,13 +1,11 @@
 /**
  * LinkedIn → Profile.json Auto-Sync Script
  * 
- * Uses LinkedIn's internal Voyager API with your li_at session cookie
+ * Uses LinkedIn's internal API with your li_at session cookie
  * to fetch your latest profile data and merge it into profile.json.
  * 
  * Usage:
  *   LINKEDIN_COOKIE="your_li_at_cookie" node scripts/sync-linkedin.mjs
- * 
- * The cookie can also be set via .env file or GitHub Actions secret.
  */
 
 import fs from 'fs';
@@ -16,30 +14,25 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROFILE_PATH = path.join(__dirname, '..', 'public', 'data', 'profile.json');
-const LINKEDIN_VANITY = 'adam-naeman'; // Your LinkedIn vanity URL slug
+const LINKEDIN_VANITY = 'adam-naeman';
 
-// ---- LinkedIn API Helpers ----
-const VOYAGER_BASE = 'https://www.linkedin.com/voyager/api';
-const HEADERS = {
-  'accept': 'application/vnd.linkedin.normalized+json+2.1',
-  'x-li-lang': 'en_US',
-  'x-restli-protocol-version': '2.0.0',
-  'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-};
-
-async function fetchLinkedIn(endpoint, cookie) {
-  const url = `${VOYAGER_BASE}${endpoint}`;
+// ---- Fetch from LinkedIn with proper auth ----
+async function linkedInFetch(url, cookie) {
   const response = await fetch(url, {
     headers: {
-      ...HEADERS,
-      'cookie': `li_at=${cookie}`,
-      'csrf-token': cookie.substring(0, 20),
-      'x-li-track': '{"clientVersion":"1.13.8888"}',
+      'accept': 'application/vnd.linkedin.normalized+json+2.1',
+      'x-li-lang': 'en_US',
+      'x-restli-protocol-version': '2.0.0',
+      'x-li-page-instance': 'urn:li:page:d_flagship3_profile_view_base;',
+      'csrf-token': 'ajax:0',
+      'cookie': `li_at=${cookie}; JSESSIONID="ajax:0"`,
+      'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
     },
   });
 
   if (!response.ok) {
-    throw new Error(`LinkedIn API error: ${response.status} ${response.statusText}`);
+    const text = await response.text().catch(() => '');
+    throw new Error(`LinkedIn API ${response.status}: ${response.statusText} — ${text.substring(0, 200)}`);
   }
 
   return response.json();
@@ -49,27 +42,22 @@ async function fetchLinkedIn(endpoint, cookie) {
 async function fetchProfile(cookie) {
   console.log('📡 Fetching LinkedIn profile...');
 
-  // Step 1: Get profile basics
-  const profileData = await fetchLinkedIn(
-    `/identity/profiles/${LINKEDIN_VANITY}`,
+  // Use the profileView endpoint which returns everything
+  const data = await linkedInFetch(
+    `https://www.linkedin.com/voyager/api/identity/profiles/${LINKEDIN_VANITY}/profileView`,
     cookie
   );
 
-  // Step 2: Get profile view (education, certifications, skills, etc.)
-  const profileView = await fetchLinkedIn(
-    `/identity/profiles/${LINKEDIN_VANITY}/profileView`,
-    cookie
-  );
-
-  return { profileData, profileView };
+  return data;
 }
 
-// ---- Extract Data ----
-function extractProfileData(raw) {
-  const { profileData, profileView } = raw;
-
-  const profile = profileData || {};
-  const included = profileView?.included || [];
+// ---- Extract Data from Profile View ----
+function extractProfileData(data) {
+  const included = data?.included || [];
+  const profileEntries = included.filter(
+    (item) => item.$type === 'com.linkedin.voyager.identity.profile.Profile'
+  );
+  const profile = profileEntries[0] || {};
 
   // Extract education
   const education = included
@@ -80,13 +68,7 @@ function extractProfileData(raw) {
       period: formatDateRange(edu.timePeriod),
       grade: edu.grade || '',
       highlights: edu.activities ? [edu.activities] : [],
-    }))
-    .sort((a, b) => {
-      // Sort by start year descending
-      const yearA = parseInt(a.period) || 0;
-      const yearB = parseInt(b.period) || 0;
-      return yearB - yearA;
-    });
+    }));
 
   // Extract certifications
   const certifications = included
@@ -104,7 +86,7 @@ function extractProfileData(raw) {
     .map((s) => s.name)
     .filter(Boolean);
 
-  // Extract experience
+  // Extract experience/positions
   const experience = included
     .filter((item) => item.$type === 'com.linkedin.voyager.identity.profile.Position')
     .map((pos) => ({
@@ -113,22 +95,17 @@ function extractProfileData(raw) {
       period: formatDateRange(pos.timePeriod),
       description: pos.description || '',
       location: pos.locationName || '',
-    }))
-    .sort((a, b) => {
-      const yearA = parseInt(a.period) || 0;
-      const yearB = parseInt(b.period) || 0;
-      return yearB - yearA;
-    });
+    }));
 
   return {
-    name: [profile.firstName, profile.lastName].filter(Boolean).join(' '),
-    title: profile.headline || '',
-    location: profile.locationName || profile.geoLocationName || '',
-    about: profile.summary || '',
-    education,
-    certifications,
-    linkedin_skills: skills,
-    experience,
+    name: [profile.firstName, profile.lastName].filter(Boolean).join(' ') || undefined,
+    title: profile.headline || undefined,
+    location: profile.locationName || profile.geoLocationName || undefined,
+    about: profile.summary || undefined,
+    education: education.length > 0 ? education : undefined,
+    certifications: certifications.length > 0 ? certifications : undefined,
+    linkedin_skills: skills.length > 0 ? skills : undefined,
+    experience: experience.length > 0 ? experience : undefined,
     last_synced: new Date().toISOString(),
   };
 }
@@ -152,40 +129,19 @@ function formatDateRange(timePeriod) {
 function mergeProfile(existing, linkedInData) {
   const merged = { ...existing };
 
-  // Update basic info from LinkedIn
+  // Only override fields that LinkedIn returned (non-undefined)
   if (linkedInData.name) merged.name = linkedInData.name;
   if (linkedInData.title) merged.title = linkedInData.title;
   if (linkedInData.location) merged.location = linkedInData.location;
   if (linkedInData.about) merged.about = linkedInData.about;
+  if (linkedInData.education) merged.education = linkedInData.education;
+  if (linkedInData.certifications) merged.certifications = linkedInData.certifications;
+  if (linkedInData.linkedin_skills) merged.linkedin_skills = linkedInData.linkedin_skills;
+  if (linkedInData.experience) merged.experience = linkedInData.experience;
 
-  // Update education (replace with LinkedIn data)
-  if (linkedInData.education.length > 0) {
-    merged.education = linkedInData.education;
-  }
-
-  // Update certifications (replace with LinkedIn data)
-  if (linkedInData.certifications.length > 0) {
-    merged.certifications = linkedInData.certifications;
-  }
-
-  // Merge skills (combine LinkedIn skills with existing categorized skills)
-  if (linkedInData.linkedin_skills.length > 0) {
-    // Keep existing categorized skills but add a "linkedin_endorsed" array
-    merged.linkedin_skills = linkedInData.linkedin_skills;
-  }
-
-  // Add experience if it exists
-  if (linkedInData.experience.length > 0) {
-    merged.experience = linkedInData.experience;
-  }
-
-  // Timestamp
   merged.last_synced = linkedInData.last_synced;
 
-  // PRESERVE user-only fields (these are NOT from LinkedIn)
-  // resumes, github, subtitle_roles, social_links, stats, etc.
-  // These stay untouched because we only override specific fields above.
-
+  // PRESERVE: resumes, github, subtitle_roles, social_links, stats, skills (categorized), avatar_url, email
   return merged;
 }
 
@@ -201,8 +157,6 @@ async function main() {
     console.error('  2. Open DevTools (F12) → Application → Cookies → linkedin.com');
     console.error('  3. Copy the value of the "li_at" cookie');
     console.error('  4. Run: LINKEDIN_COOKIE="paste_value_here" node scripts/sync-linkedin.mjs');
-    console.error('');
-    console.error('For GitHub Actions, add it as a repository secret named LINKEDIN_COOKIE.');
     process.exit(1);
   }
 
@@ -220,27 +174,30 @@ async function main() {
     const raw = await fetchProfile(cookie);
     const linkedInData = extractProfileData(raw);
 
-    console.log(`✅ Fetched profile: ${linkedInData.name}`);
-    console.log(`   📚 Education: ${linkedInData.education.length} entries`);
-    console.log(`   🏆 Certifications: ${linkedInData.certifications.length} entries`);
-    console.log(`   💼 Experience: ${linkedInData.experience.length} entries`);
-    console.log(`   🛠️  Skills: ${linkedInData.linkedin_skills.length} entries`);
+    console.log(`✅ Fetched profile: ${linkedInData.name || '(name not found)'}`);
+    console.log(`   📚 Education: ${linkedInData.education?.length || 0} entries`);
+    console.log(`   🏆 Certifications: ${linkedInData.certifications?.length || 0} entries`);
+    console.log(`   💼 Experience: ${linkedInData.experience?.length || 0} entries`);
+    console.log(`   🛠️  Skills: ${linkedInData.linkedin_skills?.length || 0} entries`);
 
     // Merge
     const merged = mergeProfile(existing, linkedInData);
 
     // Write back
     fs.writeFileSync(PROFILE_PATH, JSON.stringify(merged, null, 2) + '\n', 'utf-8');
-    console.log(`\n💾 Updated profile.json at ${PROFILE_PATH}`);
+    console.log(`\n💾 Updated profile.json`);
     console.log(`🕐 Last synced: ${merged.last_synced}`);
 
   } catch (err) {
     console.error('❌ LinkedIn sync failed:', err.message);
     console.error('');
-    console.error('Common issues:');
-    console.error('  - Cookie expired → Re-copy li_at from browser');
-    console.error('  - Rate limited → Try again later');
-    console.error('  - LinkedIn API changed → Check for script updates');
+    if (err.message.includes('401') || err.message.includes('403')) {
+      console.error('🔑 Your cookie has expired. Please re-copy li_at from your browser.');
+    } else {
+      console.error('Common issues:');
+      console.error('  - Cookie expired → Re-copy li_at from browser');
+      console.error('  - Rate limited → Try again later');
+    }
     process.exit(1);
   }
 }
