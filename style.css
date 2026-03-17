@@ -659,24 +659,6 @@ img {
   flex-shrink: 0;
 }
 
-.about__sync-badge {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 16px;
-  padding: 8px 14px;
-  border-radius: var(--radius-sm);
-  background: rgba(0, 119, 181, 0.08);
-  border: 1px solid rgba(0, 119, 181, 0.15);
-  font-size: 0.8rem;
-  color: var(--text-muted);
-}
-
-.about__sync-badge svg {
-  color: #0077b5;
-  flex-shrink: 0;
-}
-
 /* ================================================
    SKILLS SECTION
    ================================================ */

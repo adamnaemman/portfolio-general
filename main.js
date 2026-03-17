@@ -32,7 +32,6 @@ async function init() {
   renderEducation();
   renderExperience();
   renderCertifications();
-  renderSyncBadge();
   renderResumes();
   fetchGitHubRepos();
   registerServiceWorker();
@@ -332,22 +331,6 @@ function renderExperience() {
     .join('');
 
   initScrollAnimations();
-}
-
-// ---- Render Sync Badge ----
-function renderSyncBadge() {
-  if (!profileData?.last_synced) return;
-  const badge = document.getElementById('sync-badge');
-  const timeEl = document.getElementById('sync-time');
-  if (!badge || !timeEl) return;
-
-  const date = new Date(profileData.last_synced);
-  timeEl.textContent = date.toLocaleDateString('en-MY', {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-  });
-  badge.style.display = 'flex';
 }
 
 // ---- Render Certifications ----
